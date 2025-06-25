@@ -1,4 +1,4 @@
-import {usePopularProducts, ProductCard} from '@shopify/shop-minis-react'
+import {usePopularProducts, ProductCard, useOrders} from '@shopify/shop-minis-react'
 import {useMemo} from 'react'
 
 // Mock function to get vendor from product (since SDK type is unknown)
@@ -15,54 +15,51 @@ interface VendorStat {
 
 export function App() {
   const {products} = usePopularProducts()
+  const {orders, loading: ordersLoading, error: ordersError} = useOrders()
 
-  // --- Mock data for purchase and discount summary ---
-  const purchaseSummary = {
-    totalBought: 7,
-    totalSaved: 42.75,
-    products: [
-      {
-        name: 'Eco Water Bottle',
-        originalPrice: 25.0,
-        discountedPrice: 18.0,
-      },
-      {
-        name: 'Wireless Earbuds',
-        originalPrice: 59.99,
-        discountedPrice: 39.99,
-      },
-      {
-        name: 'Yoga Mat',
-        originalPrice: 30.0,
-        discountedPrice: 22.0,
-      },
-      {
-        name: 'Reusable Tote Bag',
-        originalPrice: 12.0,
-        discountedPrice: 9.0,
-      },
-      {
-        name: 'Organic Coffee Beans',
-        originalPrice: 18.0,
-        discountedPrice: 14.5,
-      },
-      {
-        name: 'Bluetooth Speaker',
-        originalPrice: 45.0,
-        discountedPrice: 32.0,
-      },
-      {
-        name: 'Fitness Tracker',
-        originalPrice: 80.0,
-        discountedPrice: 60.75,
-      },
-    ],
-  }
-  // Calculate per-product savings
-  const productSavings = purchaseSummary.products.map((p) => ({
-    ...p,
-    saved: +(p.originalPrice - p.discountedPrice).toFixed(2),
-  }))
+  // --- Calculate purchase and discount summary from real orders ---
+  const purchaseSummary = useMemo(() => {
+    if (!orders || orders.length === 0) {
+      return {
+        totalBought: 0,
+        totalSaved: 0,
+        products: []
+      }
+    }
+    let totalBought = 0
+    let totalSaved = 0
+    const discountedProducts: {
+      name: string
+      originalPrice: number
+      discountedPrice: number
+      saved: number
+    }[] = []
+    orders.forEach(order => {
+      order.lineItems.forEach(item => {
+        const product = item.product
+        if (!product) return
+        const quantity = item.quantity || 1
+        const price = Number(product.price?.amount || 0)
+        const compareAt = Number(product.compareAtPrice?.amount || price)
+        totalBought += quantity
+        if (compareAt > price) {
+          const saved = (compareAt - price) * quantity
+          totalSaved += saved
+          discountedProducts.push({
+            name: product.title,
+            originalPrice: compareAt,
+            discountedPrice: price,
+            saved: +(saved.toFixed(2))
+          })
+        }
+      })
+    })
+    return {
+      totalBought,
+      totalSaved: +(totalSaved.toFixed(2)),
+      products: discountedProducts
+    }
+  }, [orders])
 
   // Group products by vendor and assign a random top % buyer value
   const vendorStats: VendorStat[] = useMemo(() => {
@@ -111,29 +108,41 @@ export function App() {
       {/* --- Purchase & Discount Summary Section --- */}
       <div className="mb-6 bg-green-50 border border-green-200 rounded-lg p-4 flex flex-col items-center">
         <h2 className="text-lg font-semibold text-green-700 mb-1">Your Shopping Summary</h2>
-        <div className="flex flex-row gap-6 mb-2">
-          <div className="flex flex-col items-center">
-            <span className="text-2xl font-bold text-green-800">{purchaseSummary.totalBought}</span>
-            <span className="text-xs text-gray-500">Products Bought</span>
-          </div>
-          <div className="flex flex-col items-center">
-            <span className="text-2xl font-bold text-green-800">${purchaseSummary.totalSaved.toFixed(2)}</span>
-            <span className="text-xs text-gray-500">Saved with Discounts</span>
-          </div>
-        </div>
-        <div className="w-full">
-          <h3 className="text-sm font-medium text-green-600 mb-2">Discounted Products</h3>
-          <ul className="flex flex-col gap-2">
-            {productSavings.map((p) => (
-              <li key={p.name} className="flex flex-row justify-between items-center bg-white rounded shadow-sm px-3 py-2 border border-gray-100">
-                <span className="text-gray-700 text-sm font-medium">{p.name}</span>
-                <span className="text-xs text-gray-400 line-through mr-2">${p.originalPrice.toFixed(2)}</span>
-                <span className="text-green-700 font-semibold text-sm">${p.discountedPrice.toFixed(2)}</span>
-                <span className="ml-2 text-green-500 text-xs font-bold">- ${p.saved}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
+        {ordersLoading ? (
+          <span className="text-gray-500 text-sm">Loading...</span>
+        ) : ordersError ? (
+          <span className="text-red-500 text-sm">Failed to load orders</span>
+        ) : (
+          <>
+            <div className="flex flex-row gap-6 mb-2">
+              <div className="flex flex-col items-center">
+                <span className="text-2xl font-bold text-green-800">{purchaseSummary.totalBought}</span>
+                <span className="text-xs text-gray-500">Products Bought</span>
+              </div>
+              <div className="flex flex-col items-center">
+                <span className="text-2xl font-bold text-green-800">${purchaseSummary.totalSaved.toFixed(2)}</span>
+                <span className="text-xs text-gray-500">Saved with Discounts</span>
+              </div>
+            </div>
+            <div className="w-full">
+              <h3 className="text-sm font-medium text-green-600 mb-2">Discounted Products</h3>
+              {purchaseSummary.products.length === 0 ? (
+                <span className="text-xs text-gray-400">No discounted products found in your orders.</span>
+              ) : (
+                <ul className="flex flex-col gap-2">
+                  {purchaseSummary.products.map((p) => (
+                    <li key={p.name + p.originalPrice + p.discountedPrice} className="flex flex-row justify-between items-center bg-white rounded shadow-sm px-3 py-2 border border-gray-100">
+                      <span className="text-gray-700 text-sm font-medium">{p.name}</span>
+                      <span className="text-xs text-gray-400 line-through mr-2">${p.originalPrice.toFixed(2)}</span>
+                      <span className="text-green-700 font-semibold text-sm">${p.discountedPrice.toFixed(2)}</span>
+                      <span className="ml-2 text-green-500 text-xs font-bold">- ${p.saved}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </>
+        )}
       </div>
       {/* --- End Purchase & Discount Summary Section --- */}
     </div>
